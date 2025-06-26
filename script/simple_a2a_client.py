@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from uuid import uuid4
 
 import httpx
@@ -50,12 +51,20 @@ async def main():
             params=MessageSendParams(**send_message_payload)
         )
 
+        # Initialize timing variables
+        request_start_time = time.time()
+        first_response_time = None
+        artifact_times = {}
+        stream_end_time = None
+        
         # Send the message and handle the stream
         artifacts = {}
         task_id = None
         print("Streaming response:")
         try:
             async for response in client.send_message_streaming(request):
+                current_time = time.time()
+                
                 if hasattr(response.root, "error") and response.root.error:
                     logger.error("Received an error: %s", response.root.error.message)
                     break
@@ -74,6 +83,7 @@ async def main():
                     
                     logger.info("Task status update: %s", result.status.state.value)
                     if result.final:
+                        stream_end_time = current_time
                         print("\nStream finished.")
                         break
                 
@@ -84,6 +94,19 @@ async def main():
                         logger.info("Task ID captured from artifact update: %s", task_id)
                     
                     artifact_id = result.artifact.artifactId
+                    
+                    # Record first response time
+                    if first_response_time is None:
+                        first_response_time = current_time
+                        first_response_duration = first_response_time - request_start_time
+                        print(f"\n⏱️  First response received in: {first_response_duration:.3f} seconds")
+                    
+                    # Record artifact timing
+                    if artifact_id not in artifact_times:
+                        artifact_times[artifact_id] = current_time
+                        artifact_duration = current_time - request_start_time
+                        print(f"\n📦 Artifact '{artifact_id}' first received in: {artifact_duration:.3f} seconds")
+                    
                     if artifact_id not in artifacts:
                         artifacts[artifact_id] = ""
 
@@ -97,6 +120,29 @@ async def main():
                             
         except Exception as e:
             logger.error("An error occurred during streaming: %s", e)
+            stream_end_time = time.time()
+
+        # Calculate and display timing results
+        if stream_end_time is None:
+            stream_end_time = time.time()
+        
+        total_duration = stream_end_time - request_start_time
+        
+        print("\n" + "="*50)
+        print("⏱️  TIMING RESULTS")
+        print("="*50)
+        print(f"Total request duration: {total_duration:.3f} seconds")
+        
+        if first_response_time:
+            print(f"Time to first response: {first_response_duration:.3f} seconds")
+        
+        if artifact_times:
+            print(f"\nArtifact timing breakdown:")
+            for artifact_id, artifact_time in artifact_times.items():
+                artifact_duration = artifact_time - request_start_time
+                print(f"  - {artifact_id}: {artifact_duration:.3f} seconds")
+        
+        print("="*50)
 
         print("\nFinal artifacts:")
         for artifact_id, content in artifacts.items():
